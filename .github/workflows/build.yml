@@ -43,9 +43,69 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'Todo v__VERSION__'
-          releaseBody: 'Windows .exe/.msi, Linux .deb/AppImage, macOS .dmg'
-          releaseDraft: false
+
+      - name: Patch .deb with bundled webkit2gtk (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          set -e
+          DEB_DIR="src-tauri/target/release/bundle/deb"
+          DEB=$(ls $DEB_DIR/*.deb 2>/dev/null | head -1)
+          if [ -z "$DEB" ]; then echo "No .deb found, skipping"; exit 0; fi
+          
+          NAME=$(basename "$DEB" .deb)
+          WORK="/tmp/deb-patch"
+          rm -rf "$WORK"
+          mkdir -p "$WORK"
+          
+          # Extract the .deb
+          dpkg-deb -R "$DEB" "$WORK"
+          
+          # Find the binary
+          BIN=$(find "$WORK" -name todo-list -type f | head -1)
+          if [ -z "$BIN" ]; then
+            BIN=$(find "$WORK" -type f -executable | head -1)
+          fi
+          echo "Binary: $BIN"
+          
+          # Collect webkit + javascriptcore so files that the binary links to
+          LIBDIR="$WORK/usr/lib/todo-list"
+          mkdir -p "$LIBDIR"
+          
+          SO_FILES=$(ldd "$BIN" 2>/dev/null | awk '/=> \// {print $3}' | grep -E 'webkitgtk-4\.1|javascriptcoregtk-4\.1' || true)
+          for so in $SO_FILES; do
+            cp -v "$so" "$LIBDIR/"
+          done
+          
+          if [ -z "$SO_FILES" ]; then echo "No webkit so files to bundle, skipping"; exit 0; fi
+          
+          # Create wrapper script
+          mv "$BIN" "$BIN.bin"
+          cat > "$BIN" << 'WRAPPER'
+          #!/bin/sh
+          export LD_LIBRARY_PATH=/usr/lib/todo-list:$LD_LIBRARY_PATH
+          exec "$(dirname "$0")/todo-list.bin" "$@"
+          WRAPPER
+          chmod +x "$BIN"
+          
+          # Drop webkit deps from control
+          sed -i '/libwebkit2gtk-4.1/d; /libjavascriptcoregtk-4.1/d' "$WORK/DEBIAN/control"
+          
+          # Repack
+          NEW_DEB="$DEB_DIR/${NAME}+bundle.deb"
+          dpkg-deb -b "$WORK" "$NEW_DEB"
+          echo "Patched .deb: $NEW_DEB"
+          
+          # Remove original .deb to avoid confusion
+          rm "$DEB"
+          echo "removed original .deb"
+
+      - name: Upload patched .deb to Release (Linux only)
+        if: runner.os == 'Linux'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            src-tauri/target/release/bundle/deb/*.deb
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

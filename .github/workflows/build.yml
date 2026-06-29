@@ -43,6 +43,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
+          releaseName: 'Todo v__VERSION__'
+          releaseBody: 'Windows .exe/.msi, Linux .deb(+bundle)/AppImage, macOS .dmg'
+          releaseDraft: false
 
       - name: Patch .deb with bundled webkit2gtk (Linux only)
         if: runner.os == 'Linux'

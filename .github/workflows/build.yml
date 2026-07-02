@@ -32,7 +32,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+            librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev dpkg-sig
 
       - name: Install npm dependencies
         run: npm install
@@ -101,6 +101,33 @@ jobs:
           # Remove original .deb to avoid confusion
           rm "$DEB"
           echo "removed original .deb"
+
+      - name: GPG sign Linux packages
+        if: runner.os == 'Linux' && vars.GPG_PRIVATE_KEY != ''
+        run: |
+          set -e
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | base64 -d | gpg --batch --import
+          KEY_ID=$(gpg --list-secret-keys --with-colons | grep ^sec | cut -d: -f5 | head -1)
+          echo "Signing with key: $KEY_ID"
+
+          # Sign .deb
+          for deb in src-tauri/target/release/bundle/deb/*.deb; do
+            [ -f "$deb" ] || continue
+            echo "Signing $deb"
+            echo "${{ secrets.GPG_PASSPHRASE }}" | \
+              dpkg-sig --sign builder -k "$KEY_ID" "$deb"
+            echo "  -> created .deb with embedded signature"
+          done
+
+          # Sign .AppImage
+          for appimg in src-tauri/target/release/bundle/appimage/*.AppImage; do
+            [ -f "$appimg" ] || continue
+            echo "Signing $appimg"
+            echo "${{ secrets.GPG_PASSPHRASE }}" | \
+              gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+                --detach-sign --armor -o "$appimg.asc" "$appimg"
+            echo "  -> created $appimg.asc"
+          done
 
       - name: Upload patched .deb to Release (Linux only)
         if: runner.os == 'Linux'
